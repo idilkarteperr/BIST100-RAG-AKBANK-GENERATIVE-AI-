@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
-
-# =================================================================================
+# =============================================================================
+# 📊 BIST100 RAG – Yerel Veri Seti Üzerinde Çalışan Finansal Bilgi Asistanı
+# Bu uygulama, yerel olarak oluşturulmuş BIST100 CSV veri setini kullanarak
+# Haystack altyapısıyla RAG (Retrieval-Augmented Generation) modelini uygular.
+# Kullanıcı, Streamlit arayüzü üzerinden doğal dilde sorular sorabilir.
+# =============================================================================
 
 import os
 import streamlit as st
@@ -19,9 +23,13 @@ from haystack.components.retrievers.in_memory import InMemoryEmbeddingRetriever
 from haystack.components.builders import ChatPromptBuilder
 from haystack_integrations.components.generators.google_genai import GoogleGenAIChatGenerator 
 from haystack.utils import Secret
-# --- 1. Adım: Ortam Değişkenlerini ve API Anahtarını Yükleme ---
-#.env dosyasını yükleyerek API anahtarını güvenli bir şekilde alıyoruz.
-# Hugging Face Spaces'e deploy ederken bu anahtarı "Secrets" bölümüne eklemelisiniz.
+
+# -------------------------------------------------------------------------
+# 1️⃣ Ortam Değişkenlerini Yükleme
+# -------------------------------------------------------------------------
+# Google Gemini API anahtarı ve diğer gizli değişkenleri .env dosyasından çeker.
+# Anahtar bulunmazsa uygulama hata verir ve durur.
+
 try:
     load_dotenv()
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -32,11 +40,13 @@ try:
 except Exception as e:
     st.error(f"Ortam değişkenleri yüklenirken bir hata oluştu: {e}")
     st.stop()
+# -------------------------------------------------------------------------
+# 2️⃣ Veri Yükleme ve Dönüştürme
+# -------------------------------------------------------------------------
+# Yerel 'bist100verilercsv.csv' dosyasını okur ve Haystack Document nesnelerine dönüştürür.
+# Her satırda şirketin adı, sembolü, faaliyet alanı, piyasa değeri, temettü oranı vb. bulunur.
+# Belgeler embedding işlemine hazır hale getirilir.
 
-# --- 2. Adım: Veri Yükleme ve Hazırlama ---
-# Bu fonksiyon, Hugging Face'ten veri setini indirir, işler ve
-# Haystack'in kullanabileceği Document formatına dönüştürür.
-# Streamlit'in cache mekanizması sayesinde bu işlem sadece bir kez yapılır.
 @st.cache_resource
 def load_and_prepare_data():
     
@@ -47,30 +57,23 @@ def load_and_prepare_data():
             #dataset = load_dataset("bist100verilercsv.csv", split="train", token=HF_TOKEN)
             #df = dataset.to_pandas()
 
-            # Yalnızca Türkçe özetleri olan ve boş olmayan tezleri al
+            # 'rag-text' sütunu boş olan kayıtlar çıkarılır
             df_turkish = df[df['rag-text'].notna() & (df['rag-text']!= '')].copy()
             df_turkish.reset_index(drop=True, inplace=True)
             df_turkish = df_turkish.head(100) #zaten yüz
 
-            # Haystack Document nesneleri oluştur
-            # Haystack Document nesneleri oluştur
+             # Her satırı Haystack Document nesnesine dönüştür
             documents = list()
             for _, row in df.iterrows(): # df_turkish yerine yeni yüklenen DataFrame'iniz olan 'df' kullanılmalı
                 
-                # 1. content (Ana Aranacak Metin) Eşleştirme
-                # 'rag-text' alanı, RAG için en zengin bilgiyi içerir ve ana aranacak metin olmalıdır.
+                 # Arama yapılacak ana içerik metni
                 content = str(row['rag-text'])
                 
                 # 2. meta (Ek Bilgiler) Eşleştirme
                 meta = {
                     # 'title_tr' -> 'sembol'
                     # Document.content'ı 'rag-text' olarak kullandığımız için, sembolü (ASELS, GARAN vb.)
-                    # promplarda kolayca referans verebilmek için 'title' olarak saklamak mantıklıdır.
                     'title': str(row['sembol']), 
-                    
-                    # 'author' -> 'sirket'
-                    # Şirket adını (uzun halini) okunaklı bir etiket olarak saklamak için 'author' yerine 
-                    # doğrudan kendi adıyla saklamak en iyisidir.
                     'sirket': str(row['sirket']),
                     
                     # Diğer önemli alanları metadata olarak saklayalım:
@@ -78,17 +81,15 @@ def load_and_prepare_data():
                     'kur': str(row['kur']),
                     'temettu': str(row['temettue']),
                     'endeks': str(row['endeks'])
-                    
-                    # NOT: 'author', 'year', 'subject' gibi eski alan adlarını KULLANMAYIN.
-                    # Bunlar anlamsız olacaktır. Bunun yerine verinizdeki gerçek alan adlarını kullanın.
+                
                 }
                 
                 # Document nesnesini listeye ekle
                 documents.append(Document(content=content, meta=meta))
 
-# Buradan sonra DocumentSplitter çalıştırılmalıdır (mevcut kodunuzdaki gibi)
+               # Buradan sonra DocumentSplitter çalıştırılmalıdır 
+               # Belgeleri 700 kelimelik parçalara böler (RAG için daha verimli olur)
             
-            # Belgeleri parçalara ayır
             splitter = DocumentSplitter(split_by="word", split_length=700, split_overlap=0)
             split_docs = splitter.run(documents)
             
@@ -97,10 +98,12 @@ def load_and_prepare_data():
             st.error(f"Veri seti yüklenirken veya işlenirken hata oluştu: {e}")
             return None
 
-# --- 3. Adım: FAISS Vektör Veritabanı Oluşturma ---
-# Bu fonksiyon, hazırlanan belgeleri alır, gömme (embedding) modelini kullanarak
-# vektörlere dönüştürür ve bir FAISS veritabanı oluşturur.
-# Bu işlem de cache'lenir, böylece uygulama her yeniden çalıştığında tekrarlanmaz.
+# -------------------------------------------------------------------------
+# 3️⃣ Vektör Veritabanı Oluşturma (In-Memory)
+# -------------------------------------------------------------------------
+# Belgeleri embedding modelinden geçirip vektör temsillerini oluşturur.
+# Bu vektörleri bellekte tutan bir DocumentStore’a kaydeder.
+
 @st.cache_resource
 def create_faiss_index(_split_docs):
     """
@@ -131,9 +134,14 @@ def create_faiss_index(_split_docs):
             st.error(f"Vektör indeksi oluşturulurken hata oluştu: {e}")
             return None
 
-# --- 4. Adım: RAG Pipeline Kurma ---
-# Bu fonksiyon, RAG sisteminin tüm bileşenlerini (retriever, prompt, generator)
-# bir araya getirerek sorgulanabilir bir Haystack Pipeline'ı oluşturur.
+# -------------------------------------------------------------------------
+# 4️⃣ RAG Pipeline Kurulumu
+# -------------------------------------------------------------------------
+# RAG akışında yer alan 4 ana bileşeni birbirine bağlar:
+# 1. text_embedder → sorguyu vektörleştirir
+# 2. retriever → en benzer belgeleri getirir
+# 3. prompt_builder → belgelerden bağlam oluşturur
+# 4. generator → Google Gemini ile nihai cevabı üretir
 @st.cache_resource
 def build_rag_pipeline(_document_store):
     """
@@ -144,6 +152,7 @@ def build_rag_pipeline(_document_store):
         
     try:
         # 1. Geri Getirici (Retriever)
+         # Retriever: en alakalı 3(top_k=3) belgeyi getirir
         retriever = InMemoryEmbeddingRetriever(document_store=_document_store, top_k=3)
         
         # 2. Prompt Şablonu
@@ -196,8 +205,12 @@ def build_rag_pipeline(_document_store):
     except Exception as e:
         st.error(f"RAG boru hattı oluşturulurken hata oluştu: {e}")
         return None
-
-# --- 5. Adım: Streamlit Web Arayüzü ---
+        
+# -------------------------------------------------------------------------
+# 5️⃣ Streamlit Arayüzü
+# -------------------------------------------------------------------------
+# Kullanıcıdan gelen doğal dil soruları alır, RAG pipeline’ı ile işleyip
+# yanıtları sohbet arayüzünde gösterir.
 def main():
     st.set_page_config(page_title="BİST100-İDİLKARTEPER CHATBOT", page_icon="$")
     
@@ -219,23 +232,23 @@ def main():
         st.warning("Uygulama başlatılamadı. Lütfen hata mesajlarını kontrol edin.")
         st.stop()
 
-    # Sohbet geçmişini saklamak için session state kullan
+    #  Sohbet geçmişi session state içinde tutulur
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Geçmiş mesajları göster
+    # Geçmiş mesajları gösterir
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Kullanıcıdan girdi al
+    # Kullanıcıdan girdi alır
     if prompt := st.chat_input("Örn: TCELL hakkında bilgi veriniz"):
         # Kullanıcının mesajını sohbet geçmişine ekle ve göster
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # RAG boru hattını çalıştır ve yanıt al
+        # RAG boru hattını çalıştır ve yanıt alır
         with st.spinner("BIST100 taranıyor..."):
             try:
                 result = rag_pipeline.run({
@@ -253,7 +266,7 @@ def main():
             except Exception as e:
                 response = f"Sorgu işlenirken bir hata oluştu: {e}"
 
-        # Asistanın yanıtını sohbet geçmişine ekle ve göster
+        # Asistanın yanıtını sohbet geçmişine ekler ve gösterir
         st.session_state.messages.append({"role": "assistant", "content": response})
         with st.chat_message("assistant"):
             st.markdown(response)
