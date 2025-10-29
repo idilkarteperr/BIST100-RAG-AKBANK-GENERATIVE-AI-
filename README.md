@@ -3,7 +3,7 @@
 Bu proje, **Akbank Generative AI Bootcamp** kapsamında geliştirilmiş bir **Retrieval-Augmented Generation (RAG)** modelidir.  
 Amaç, **Borsa İstanbul (BIST100)** şirketleri hakkında hızlı, güvenilir ve doğal dilde yanıtlar üretmektir.
 
-🔗 **Canlı Uygulama:** [https://bist100-rag-vlagvhyz2hewypzgmsosy5.streamlit.app](https://bist100-rag-vlagvhyz2hewypzgmsosy5.streamlit.app)
+🔗 **Canlı Uygulama:** https://idilkarteperr-bist100-rag-akbank-generative-ai--bist100-vohu6j.streamlit.app
 
 ---
 
